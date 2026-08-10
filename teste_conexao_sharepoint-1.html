@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Teste de Conexão – SharePoint Raiar</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/msal/2.38.3/msal-browser.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; color: #222; }
+  h1 { font-size: 20px; }
+  button { background: #2563eb; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-size: 15px; cursor: pointer; }
+  button:disabled { background: #93c5fd; cursor: default; }
+  #log { background: #f4f4f4; border-radius: 8px; padding: 14px; margin-top: 20px; font-family: monospace; font-size: 13px; white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
+  .item { padding: 8px; border-bottom: 1px solid #e5e5e5; }
+  .item b { color: #1d4ed8; }
+  .err { color: #b91c1c; }
+  .ok { color: #15803d; }
+</style>
+</head>
+<body>
+
+<h1>Teste de Conexão — SharePoint Raiar Orgânicos</h1>
+<p>Esta é uma página de <b>teste técnico</b>, não o painel final. Ela apenas confirma se o login e a leitura via Microsoft Graph API funcionam antes de construirmos o dashboard real.</p>
+
+<button id="btnLogin">Entrar com conta Microsoft</button>
+<div id="log"></div>
+
+<script>
+// ===== CONFIGURAÇÃO =====
+// Client ID e Tenant ID do app registrado no Azure AD (não são segredos, são identificadores públicos do app)
+const msalConfig = {
+  auth: {
+    clientId: "538ecaea-c22a-4502-8f24-138199312916",
+    authority: "https://login.microsoftonline.com/6c305056-e26e-49fd-82f1-e9eb7cae3c4b",
+    redirectUri: "http://localhost:3000"
+  },
+  cache: {
+    cacheLocation: "sessionStorage" // não persiste entre sessões do navegador
+  }
+};
+
+const msalInstance = new msal.PublicClientApplication(msalConfig);
+const graphScopes = ["Sites.Read.All", "User.Read"];
+
+const logEl = document.getElementById('log');
+const btnLogin = document.getElementById('btnLogin');
+
+function log(msg, cls) {
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function getToken() {
+  const accounts = msalInstance.getAllAccounts();
+  const request = { scopes: graphScopes, account: accounts[0] };
+  try {
+    const result = await msalInstance.acquireTokenSilent(request);
+    return result.accessToken;
+  } catch (e) {
+    const result = await msalInstance.acquireTokenPopup(request);
+    return result.accessToken;
+  }
+}
+
+async function graphGet(path, token) {
+  const res = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+  }
+  return res.json();
+}
+
+btnLogin.addEventListener('click', async () => {
+  btnLogin.disabled = true;
+  logEl.innerHTML = '';
+  try {
+    log('Iniciando login...');
+    const loginResult = await msalInstance.loginPopup({ scopes: graphScopes });
+    msalInstance.setActiveAccount(loginResult.account);
+    log(`Login OK: ${loginResult.account.username}`, 'ok');
+
+    log('Obtendo token de acesso...');
+    const token = await getToken();
+    log('Token obtido com sucesso.', 'ok');
+
+    log('Buscando o site "ControleseProcessos-RAIARORGNICOS"...');
+    const site = await graphGet(
+      '/sites/organicosraiar.sharepoint.com:/sites/ControleseProcessos-RAIARORGNICOS',
+      token
+    );
+    log(`Site encontrado: ${site.displayName} (id: ${site.id})`, 'ok');
+
+    log('Listando arquivos na raiz da biblioteca de documentos...');
+    const drive = await graphGet(`/sites/${site.id}/drive/root/children`, token);
+
+    log(`${drive.value.length} itens encontrados na raiz:`, 'ok');
+    drive.value.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'item';
+      const tipo = item.folder ? '📁 pasta' : '📄 arquivo';
+      div.innerHTML = `<b>${item.name}</b> — ${tipo}${item.file ? ` (${(item.size/1024).toFixed(0)} KB)` : ''}`;
+      logEl.appendChild(div);
+    });
+
+    log('---');
+    log('Se sua planilha não aparece na raiz, ela está em uma subpasta.');
+    log('Me diga o nome da pasta e eu ajusto a busca para entrar nela.');
+
+  } catch (e) {
+    log('ERRO: ' + e.message, 'err');
+    if (e.message.includes('AADSTS90094') || e.message.includes('consent')) {
+      log('Isso confirma que falta o "admin consent" — leve este erro para quem tem Global Administrator.', 'err');
+    }
+  } finally {
+    btnLogin.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
